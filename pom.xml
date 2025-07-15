@@ -4,6 +4,10 @@
   <groupId>com.epecuen</groupId>
   <artifactId>epecuen</artifactId>
   <version>1.0.0</version>
+  <packaging>pom</packaging>
   <name>Archetype - epecuen</name>
   <url>http://maven.apache.org</url>
+  <modules>
+    <module>epecuen-common</module>
+  </modules>
 </project>
