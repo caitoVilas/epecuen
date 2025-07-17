@@ -9,5 +9,6 @@
   <url>http://maven.apache.org</url>
   <modules>
     <module>epecuen-common</module>
+    <module>product-service</module>
   </modules>
 </project>
