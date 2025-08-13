@@ -3,20 +3,28 @@ package com.eprcuen.userservice.services.impl;
 import com.eprcuen.commons.exceptions.BadRequestException;
 import com.eprcuen.commons.helpers.ValidationHelper;
 import com.eprcuen.commons.logs.WriteLog;
+import com.eprcuen.commons.models.HighMsg;
 import com.eprcuen.userservice.api.models.requests.UserRequest;
 import com.eprcuen.userservice.api.models.responses.UserResponse;
+import com.eprcuen.userservice.persistence.entities.ValidationToken;
 import com.eprcuen.userservice.persistence.repositories.UserRepository;
+import com.eprcuen.userservice.persistence.repositories.ValidationTokenRepository;
 import com.eprcuen.userservice.services.contracts.UserService;
 import com.eprcuen.userservice.utils.mappers.UserMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Implementation of the UserService interface.
@@ -31,6 +39,8 @@ import java.util.List;
 @Slf4j
 public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
+    private final ValidationTokenRepository validationTokenRepository;
+    private final KafkaTemplate<String, HighMsg> userTemplate;
 
     /**
      * Creates a new user in the repository and maps it to a UserResponse DTO.
@@ -45,7 +55,25 @@ public class UserServiceImpl implements UserService {
         this.validateUser(request);
         var user = UserMapper.mapTOEntity(request);
         return userRepository.save(user)
-                .doOnSuccess(nu -> log.info(WriteLog.logInfo("User created with ID: " + nu.getId())))
+                .doOnSuccess(nu -> {
+                    var token = this.generateValidationToken(user.getEmail());
+                    CompletableFuture<SendResult<String, HighMsg>> future = userTemplate.send("user-topic",
+                            HighMsg.builder()
+                            .email(nu.getEmail())
+                            .username(nu.getUsername())
+                            .build());
+                    future.whenCompleteAsync((r,t) ->{
+                        if (t != null) {
+                            log.error(WriteLog.logError("--> Error sending message to broker: " + t.getMessage()));
+                            throw new RuntimeException("Error sending message to broker", t);
+                        } else {
+                            validationTokenRepository.save(token);
+                            log.info(WriteLog.logInfo("--> Message sent to broker successfully"));
+                        }
+                    });
+                    log.info(WriteLog.logInfo("User created with ID: " + nu.getId()));
+
+                })
                 .map(UserMapper::mapToDto);
     }
 
@@ -91,5 +119,21 @@ public class UserServiceImpl implements UserService {
             log.error(WriteLog.logError("Validation errors: " + errors));
             throw new BadRequestException(errors);
         }
+    }
+
+    /**
+     * Generates a validation token for the user.
+     * The token is a UUID string and has an expiry date set to 1 day from now.
+     *
+     * @param email the email of the user for whom the token is generated
+     * @return a ValidationToken object containing the token and expiry date
+     */
+    private ValidationToken generateValidationToken(String email) {
+        log.info(WriteLog.logInfo("--> Generating validation Token..."));
+        return ValidationToken.builder()
+                .token(UUID.randomUUID().toString())
+                .expiryDate(LocalDateTime.now().plusDays(1)) // Token valid for 1 day
+                .email(email)
+                .build();
     }
 }
