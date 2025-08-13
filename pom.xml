@@ -55,6 +55,7 @@
     <modules>
         <module>discovery-service</module>
         <module>commons</module>
+        <module>user-service</module>
     </modules>
 
 </project>
