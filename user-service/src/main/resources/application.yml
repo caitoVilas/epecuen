@@ -1,0 +1,13 @@
+server:
+  port: 40000
+spring:
+  application:
+    name: user-service
+  r2dbc:
+    url: r2dbc:mysql://localhost:3306/epecuen
+    username: root
+    password: 123456
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
