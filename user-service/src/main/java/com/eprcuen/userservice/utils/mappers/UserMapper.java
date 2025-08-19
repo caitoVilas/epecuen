@@ -3,6 +3,7 @@ package com.eprcuen.userservice.utils.mappers;
 import com.eprcuen.userservice.api.models.requests.UserRequest;
 import com.eprcuen.userservice.api.models.responses.UserResponse;
 import com.eprcuen.userservice.persistence.entities.UserApp;
+import reactor.core.publisher.Mono;
 
 /**
  * UserMapper class for converting between UserRequest, UserResponse, and UserApp entities.
@@ -24,7 +25,6 @@ public class UserMapper {
                 .username(request.getUsername())
                 .email(request.getEmail())
                 .telephone(request.getTelephone())
-                .password(request.getPassword())
                 .role("ROLE_USER") // Default role, can be changed as needed
                 .build();
     }
@@ -44,4 +44,5 @@ public class UserMapper {
                 .role(user.getRole())
                 .build();
     }
+
 }

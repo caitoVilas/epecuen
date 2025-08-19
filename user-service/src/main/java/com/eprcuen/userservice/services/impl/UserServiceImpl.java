@@ -6,6 +6,7 @@ import com.eprcuen.commons.logs.WriteLog;
 import com.eprcuen.commons.models.HighMsg;
 import com.eprcuen.userservice.api.models.requests.UserRequest;
 import com.eprcuen.userservice.api.models.responses.UserResponse;
+import com.eprcuen.userservice.persistence.entities.UserApp;
 import com.eprcuen.userservice.persistence.entities.ValidationToken;
 import com.eprcuen.userservice.persistence.repositories.UserRepository;
 import com.eprcuen.userservice.persistence.repositories.ValidationTokenRepository;
@@ -15,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
@@ -40,7 +42,8 @@ import java.util.concurrent.CompletableFuture;
 public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
     private final ValidationTokenRepository validationTokenRepository;
-    private final KafkaTemplate<String, HighMsg> userTemplate;
+    private final PasswordEncoder passwordEncoder;
+    private final KafkaTemplate<String, Object> userTemplate;
 
     /**
      * Creates a new user in the repository and maps it to a UserResponse DTO.
@@ -54,27 +57,35 @@ public class UserServiceImpl implements UserService {
         log.info(WriteLog.logInfo("--> creating user service"));
         this.validateUser(request);
         var user = UserMapper.mapTOEntity(request);
-        return userRepository.save(user)
+        user.setPassword(passwordEncoder.encode(request.getPassword()));
+        Mono<UserApp> userNew =  userRepository.save(user)
                 .doOnSuccess(nu -> {
+                    log.info(WriteLog.logInfo("--> user created successfully with ID: " + nu.getId()));
                     var token = this.generateValidationToken(user.getEmail());
-                    CompletableFuture<SendResult<String, HighMsg>> future = userTemplate.send("user-topic",
+
+                    CompletableFuture<SendResult<String, Object>> future = userTemplate.send("user-topic",
                             HighMsg.builder()
-                            .email(nu.getEmail())
-                            .username(nu.getUsername())
-                            .build());
-                    future.whenCompleteAsync((r,t) ->{
-                        if (t != null) {
-                            log.error(WriteLog.logError("--> Error sending message to broker: " + t.getMessage()));
-                            throw new RuntimeException("Error sending message to broker", t);
+                                    .email(user.getEmail())
+                                    .username(user.getUsername())
+                                    .validationToken(token.getToken())
+                                    .build());
+                    future.whenCompleteAsync((result, throwable) -> {
+                        if (throwable != null) {
+                            log.error(WriteLog.logError("--> Error sending message to broker: " + throwable.getMessage()));
                         } else {
-                            validationTokenRepository.save(token);
                             log.info(WriteLog.logInfo("--> Message sent to broker successfully"));
                         }
-                    });
-                    log.info(WriteLog.logInfo("User created with ID: " + nu.getId()));
+                });
 
-                })
-                .map(UserMapper::mapToDto);
+        });
+        return userNew
+                .map(UserMapper::mapToDto)
+                .doOnError(err -> log.error(WriteLog.logError("Error creating user: " + err.getMessage())))
+                .flatMap(userResponse -> {
+                    ValidationToken token = generateValidationToken(user.getEmail());
+                    return validationTokenRepository.save(token)
+                            .thenReturn(userResponse);
+                });
     }
 
     /**
@@ -93,6 +104,14 @@ public class UserServiceImpl implements UserService {
                 .doOnError(err -> log.error(WriteLog.logError("Error retrieving users: " + err.getMessage())));
     }
 
+    /**
+     * Validates the user request data.
+     * Checks for required fields, email format, password strength, and uniqueness of email.
+     *
+     * @param request the UserRequest containing user details to validate
+     * @throws BadRequestException if any validation errors are found
+     */
+    @Transactional(readOnly = true)
     private void validateUser(UserRequest request){
         log.info(WriteLog.logInfo("--> validating user..."));
         List<String> errors = new ArrayList<>();
@@ -101,11 +120,18 @@ public class UserServiceImpl implements UserService {
         }
         if (request.getEmail() == null || request.getEmail().isEmpty()) {
             errors.add("Email is required");
-        }else if(Boolean.TRUE.equals(userRepository.existsByEmail(request.getEmail()).block())){
-            errors.add("Email already exists");
         } else if (!ValidationHelper.validateEmail(request.getEmail())) {
             errors.add("Email format is invalid");
         }
+       userRepository.existsByEmail(request.getEmail())
+               .flatMap(exists -> {
+                   if (exists) {
+                       errors.add("Email is already in use");
+                   }
+                   return Mono.empty();
+               });
+
+
         if (request.getPassword() == null || request.getPassword().isEmpty()) {
             errors.add("Password is required");
         } else if (!request.getPassword().equals(request.getConfirmPassword())) {
@@ -135,5 +161,28 @@ public class UserServiceImpl implements UserService {
                 .expiryDate(LocalDateTime.now().plusDays(1)) // Token valid for 1 day
                 .email(email)
                 .build();
+    }
+
+    private void  respaldo(){
+       /* Mono<UserApp> userNew =  userRepository.save(user)
+                .doOnSuccess(nu -> {
+                    log.info(WriteLog.logInfo("--> user created successfully with ID: " + nu.getId()));
+                    var token = this.generateValidationToken(user.getEmail());
+
+                    CompletableFuture<SendResult<String, Object>> future = userTemplate.send("user-topic",
+                            HighMsg.builder()
+                                    .email(user.getEmail())
+                                    .username(user.getUsername())
+                                    .validationToken(token.getToken())
+                                    .build());
+                    future.whenCompleteAsync((result, throwable) -> {
+                        if (throwable != null) {
+                            log.error(WriteLog.logError("--> Error sending message to broker: " + throwable.getMessage()));
+                        } else {
+                            log.info(WriteLog.logInfo("--> Message sent to broker successfully"));
+                        }
+                    });
+
+                });*/
     }
 }
